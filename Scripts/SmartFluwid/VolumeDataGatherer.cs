@@ -15,6 +15,7 @@ public class VolumeDataGatherer : MonoBehaviour
     private Quaternion m_baseRotation;
 
     [SerializeField] private bool m_forceUpdate = false;
+    [SerializeField] private bool m_useChebyshevForInterpolation = false;
 
     [Header("Interpolation")]
     [SerializeField] [Range(3, 25)] private int m_anglesCount = 10;
@@ -53,12 +54,26 @@ public class VolumeDataGatherer : MonoBehaviour
         MainProcess();
 	}
 
-    [ContextMenu("Reprocess")]
+    //[ContextMenu("Reprocess")]
+	// Since MainProcess does not use coroutines, it will freeze the application during preprocess.
     private void MainProcess()
     {
-        StartCoroutine(MainProcessCoroutine());
+        //StartCoroutine(MainProcessCoroutine());
+        ComputeData(
+            m_anglesCount, m_volumesCount, m_heightAccuracy, m_useChebyshevForInterpolation, 
+            out m_angles, out m_volumes, out m_datas
+            );
+        InterpoLagrange2D interpoLagrange2D = Interpolate();
+        //EvaluateInterpolation(interpoLagrange2D, m_angles, m_volumes, m_datas);
+
+        ComputeData(
+            m_validationAnglesCount, m_validationVolumesCount, m_validationHeightAccuracy, !m_useChebyshevForInterpolation, 
+            out m_validationAngles, out m_validationVolumes, out m_validationDatas
+            );
+        EvaluateInterpolation(interpoLagrange2D, m_validationAngles, m_validationVolumes, m_validationDatas);
     }
 
+    /*
     private IEnumerator MainProcessCoroutine()
     {
         yield return ComputeInterpolationData();
@@ -68,6 +83,7 @@ public class VolumeDataGatherer : MonoBehaviour
         yield return ComputeValidationData();
         EvaluateInterpolation(interpoLagrange2D, m_validationAngles, m_validationVolumes, m_validationDatas);
     }
+    */
 
     private double ZeroOfChebychev(double minValue, double maxValue, int step, int step_count)
     {
@@ -75,6 +91,7 @@ public class VolumeDataGatherer : MonoBehaviour
         return (minValue + maxValue) / 2 + (minValue - maxValue) * Math.Cos(step * Math.PI / step_count) / 2;
     }
 
+    /*
     private IEnumerator ComputeInterpolationData()
     {
         transform.rotation = m_baseRotation;
@@ -127,6 +144,7 @@ public class VolumeDataGatherer : MonoBehaviour
             }
         }
     }
+    */
 
     private InterpoLagrange2D Interpolate()
     {
@@ -139,6 +157,68 @@ public class VolumeDataGatherer : MonoBehaviour
         return interpoLagrange2D;
     }
 
+    private void ComputeData(int anglesCount, int volumesCount, int heightAccuracy, bool useChebyshevZeros, out double[] angles, out double[] volumes, out double[][] datas)
+    {
+        double anglePace = 180 / (anglesCount - 1);
+        double volumePace = m_fullVolume / (volumesCount - 1);
+
+        double minH = 9999, maxH = -9999;
+
+        angles = new double[anglesCount];
+        volumes = new double[volumesCount];
+        datas = new double[anglesCount][];
+
+        for (int i = 0; i < anglesCount; i++)
+        {
+            datas[i] = new double[volumesCount];
+            if(useChebyshevZeros)
+            {
+                angles[i] = ZeroOfChebychev(0, 180, i, anglesCount);
+            }
+            else
+            {
+                angles[i] = anglePace * i;
+            }
+        }
+
+        for (int i = 0; i < volumesCount; i++)
+        {
+
+            if (useChebyshevZeros)
+            {
+                volumes[i] = ZeroOfChebychev(0, m_fullVolume, i, volumesCount);
+            }
+            else
+            {
+                volumes[i] = volumePace * i;
+            }
+        }
+
+        // 1) Pour chaque orientation
+        for (int angleStep = 0; angleStep < anglesCount; angleStep++)
+        {
+            transform.rotation = m_baseRotation;
+            transform.Rotate(Vector3.right, (float)angles[angleStep]);
+            double minHeight, maxHeight;
+            // Get MinH et MaxH
+            GetMinMaxHighnessOfMesh(out minHeight, out maxHeight);
+
+            //  2) Pour chaque hauteur (entre MinH et MaxH)
+            for (int volumeStep = 0; volumeStep < volumesCount; volumeStep++)
+            {
+                double volumeToFind = volumes[volumeStep];
+                // Trouver meilleure hauteur
+                double height = HeightFromVolumeDichotomy(volumeToFind, heightAccuracy, minHeight, maxHeight);
+
+                minH = Math.Min(height, minH);
+                maxH = Math.Max(height, maxH);
+
+                datas[angleStep][volumeStep] = height;
+            }
+        }
+    }
+
+    /*
     private IEnumerator ComputeValidationData()
     {
         transform.rotation = m_baseRotation;
@@ -189,6 +269,7 @@ public class VolumeDataGatherer : MonoBehaviour
             }
         }
     }
+    */
 
     private void EvaluateInterpolation(InterpoLagrange2D interpoLagrange2D, double[] xValues, double[] yValues, double[][] zValues)
     {
